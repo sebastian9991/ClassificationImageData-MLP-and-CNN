@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.datasets import load_wine
-import math
-
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
 '''Helper Methods.'''
 def random_initalizer(n, m):
     """
@@ -17,7 +17,7 @@ def random_optimized_initalizer(n, m):
     :param: m width 
     :return: (nxm) random matrix
     """
-    return 0.01*np.random.randn(n, m) * math.sqrt(2.0 / n) #Recommended here: https://cs231n.github.io/neural-networks-2/#datapre
+    return 0.01*np.random.randn(n, m) * np.sqrt(2.0 / n) #Recommended here: https://cs231n.github.io/neural-networks-2/#datapre
 
 def ReLU(z):
     """ReLU activation function."""
@@ -25,7 +25,9 @@ def ReLU(z):
 
 def ReLU_derivative(a):
     """Derivative of ReLU activation."""
-    return (a > 0).astype(np.float32) + 1e-10 #Returns 1 if true otherwise 0 recommended the epsilon for numerical stability
+    a[a<= 0] = 0
+    a[a > 0] = 1
+    return a #Returns 1 if true otherwise 0 recommended the epsilon for numerical stability
 
 def sigmoid(z):
     """Sigmoid activation function."""
@@ -34,6 +36,19 @@ def sigmoid(z):
 def softmax_derivative(a):
     """Derivative of Sigmoid activation."""
     return sigmoid(a) * (1 - sigmoid(a))
+
+def softmax(z):
+    """Softmax activation for the output layer."""
+    """NOTE: textbook pg. 438"""
+
+    exp_z = np.exp(z - np.max(z, axis=1, keepdims=True))  #Log-sum-exp trick
+    return exp_z / np.sum(exp_z, axis=1, keepdims=True)
+
+def softmax_derivative(a):
+    """
+    Derivative for softmax activation function.
+    """
+    return softmax(a)*softmax(1 - a)
 
 class ActivationFunction:
     """
@@ -53,29 +68,20 @@ class MLPSoftmax:
     """
     MLP Softmax class
     """
-    def __init__(self, initalizer, activation_function, layer_sizes, normalization = True):
+    def __init__(self, initalizer, loss_activation,  activation_function, layer_sizes, normalization = True):
         """
         Initialize the MLP with random weights and biases.
         :param layer_sizes: List of layer sizes. [input_dim, hidden_1, ..., hidden_k, output_dim] Example: [D, 64, 64, 11]
         """
         self.initalizer = initalizer
+        self.loss_activation = loss_activation
         self.activation_function = activation_function
         self.normalization = normalization
         self.K = len(layer_sizes) - 1  # Number of layers excluding input
         self.weights = [self.initalizer(layer_sizes[i], layer_sizes[i + 1]) for i in range(self.K)] # Ex. w_0 (D, Unit_1), w_1 (Unit_1, Unit_2), w_2 (Unit_2, C)
         self.biases = [np.zeros((1, layer_sizes[i+1])) for i in range(self.K)] #https://cs231n.github.io/neural-networks-2/#datapre Recommends initalize bias as zero
-        #Concatenate these two 
 
     
-    @staticmethod
-    def softmax(z):
-        """Softmax activation for the output layer."""
-        """NOTE: I will assume that we have the nice cross-entropy layer as described in textbook pg. 438, 
-        thus not needing to calculate the diagonal jacobian of softmax."""
-        # Clip z to prevent overflow
-
-        exp_z = np.exp(z - np.max(z, axis=1, keepdims=True))  #Log-sum-exp trick
-        return exp_z / np.sum(exp_z, axis=1, keepdims=True)
     
     @staticmethod
     def cross_entropy_loss(y_true, y_pred):
@@ -83,7 +89,9 @@ class MLPSoftmax:
         """NOTE: We choose cross-entropy loss to simpify the Jacobian as described in slide chapter 9, 12.
         and textbook pg. 438"""
         #m = y_true.shape[0]
-        return -np.sum(y_true * np.log(y_pred + 1e-8))#Stability reasons recommended by ChatGPT
+        N = y_pred.shape[0]
+        y_pred = np.clip(y_pred, 1e-12, 1. - 1e-12)
+        return -np.sum(y_true * np.log(y_pred + 1e-8)) / N #Stability reasons recommended by ChatGPT
 
     def normalize(self, X):
         """
@@ -136,7 +144,7 @@ class MLPSoftmax:
         # Output layer
         z = activations[-1] @ self.weights[-1] + self.biases[-1]
         logits.append(z) #(N, Unit_i) (Unit_i, C)
-        a = self.softmax(z) #(N, C)
+        a = self.loss_activation(z) #(N, C)
         activations.append(a)
         return activations, logits
     
@@ -150,7 +158,7 @@ class MLPSoftmax:
         :return: Gradients for weights and biases.
         """
         N = X.shape[0]
-        error_above = activations[-1] - y  # Output layer error (Previous layer error) our K. Last being index -1 DIM(N, Unit_i)
+        error_above = (activations[-1] - y)*self.loss_activation(activations[-1])  # Output layer error (Previous layer error) our K. Last being index -1 DIM(N, Unit_i)
         weight_grads = []
         bias_grads = []
         
@@ -165,8 +173,6 @@ class MLPSoftmax:
             
             if i > 0:  # Compute error for the previous layer
                 """NOTE: The Hadamard product here we use is equivalent to the diagonal derivative matrix described in the textbook."""
-                l = logits[i - 1]
-                diag = self.activation_function.grad(logits[i - 1])
                 error_above = (error_above @ self.weights[i].T) * self.activation_function.grad(logits[i - 1]) # ((N, Unit_i) (Unit_{i - 1}, Unit_i)T) * (N, Unit_{i - 1}) NOTE: i - 1 because logits contains the output logit
         
         return weight_grads, bias_grads
@@ -180,7 +186,7 @@ class MLPSoftmax:
         :param iterations: Current iteration for the scheduler. 
         :param scheduler_p: Parameter for the scheduler
         """
-        learning_rate = learning_rate / (1 + t ** scheduler_p)
+        #learning_rate = learning_rate / (1 + t ** scheduler_p)
         for i in range(self.K):
 
             assert(len(self.weights) == len(weight_grads))
@@ -192,7 +198,7 @@ class MLPSoftmax:
             #print(f"difference of weights to grads: {np.linalg.norm(self.weights[i]) - np.linalg.norm(weight_grads[i])}")
             self.biases[i] = self.biases[i] - learning_rate * bias_grads[i]
     
-    def fit(self, X, y, learning_rate, epochs, batch,  termination_condition, max_iters):
+    def fit(self, X_train, y_train, X_test, y_test, learning_rate, epochs, batch,  termination_condition, max_iters, plot = False):
         """
         Train the MLP using gradient descent.
         :param X: Input data.
@@ -200,46 +206,63 @@ class MLPSoftmax:
         :param learning_rate: Learning rate.
         :param epochs: Number of training iterations.
         """
-        N, D = X.shape
-        # if self.normalization:
-        #     X = self.normalize(X) 
+        N, D = X_train.shape
         grad_norm = np.inf
-        #loss = 0
+        x_log = []
+        test_log = []
+        los = []
         for epoch in range(epochs):
             iterations = 0
+            seed = np.arange(X_train.shape[0])
+            np.random.shuffle(seed)
+            x_ = X_train[seed]
+            y_ = y_train[seed]
             for i in range(int(N / batch)):
-                random_indices = np.random.choice(N, batch, replace=False)
-                X_batch = X[random_indices, :]
-                y_batch = y[random_indices, :]
-                activations, logits = self.forward(X_batch)
-                weight_grads, bias_grads = self.backward(X_batch, y_batch, activations, logits)
+                k = i * batch
+                j = (i + 1)*batch
+                activations, logits = self.forward(x_[k:j])
+                weight_grads, bias_grads = self.backward(x_[k:j], y_[k:j], activations, logits)
+                self.update_parameters(weight_grads, bias_grads, learning_rate, t=iterations)
 
                 grad_norm = np.linalg.norm(np.hstack([g.ravel() for g in weight_grads + bias_grads])) #Compute norm over all our gradients
-                if grad_norm <= termination_condition or iterations >= max_iters: #Conditional Check for terminations 
-                    print(f"Stopping early at iteration {iterations + 1}")
+                if iterations >= max_iters: #Conditional Check for terminations 
                     break
-                self.update_parameters(weight_grads, bias_grads, learning_rate, t=iterations)
                 iterations += 1
-                #loss = self.cross_entropy_loss(y_batch, activations[-1])
-                #print(f"Batch{i + 1}, Loss: {loss:.4f}")
-                #print(f"Batch: {i} Max value in weights:", np.max(self.weights[0]))
 
-                if grad_norm <= termination_condition or iterations >= max_iters:
-                    break
-                #print(f"Epoch {epoch + 1}, Loss: {loss:.4f}")
+        
+            x_log.append(self.evaluate_acc(np.argmax(y_train, axis= 1), self.predict(X_train)))
+            test_log.append(self.evaluate_acc(np.argmax(y_test, axis=1), self.predict(X_test)))
+        #Plot within the function
+        if plot:
+            print("Epoch", epoch)
+            print("Train accuracy:", x_log[-1])
+            print("Test accuracy:", test_log[-1])
+            plt.plot(x_log, label = 'train accuracy')
+            plt.plot(test_log, label='test accuracy')
+            plt.legend(loc = 'best')
+            plt.ylabel('Accuracy')
+            plt.xlabel('epoches')
+            plt.grid()
+            plt.show()
+
     
-    def predict(self, X, y):
+    def predict(self, X):
         """
         Perform forward propagation.
         :param X: Input data of shape (n_samples, input_dim).
         :param y: True labels. (n_samples, Classes)
-        :return: loss
+        :return: loss / or actual label
         """
-        N = X.shape[0]
         activations, _ = self.forward(X)
         output_probabilites = activations[-1]
-        loss = self.cross_entropy_loss(y, output_probabilites) / N
-        return loss, output_probabilites
+        return np.argmax(output_probabilites, axis=1) #Assuming that the index corresponds to the class OHE
+
+
+    def evaluate_acc (self, y_true, y_pred):
+        """
+        To interpret evaluation better.
+        """
+        return np.sum(y_true == y_pred)/y_pred.shape[0]
 
 
 
@@ -263,6 +286,14 @@ if __name__ == "__main__":
     X = data.data # 173, 13
     y = data.target # 173, 3
     y = np.eye(3)[y]
+    y_list = np.argmax(y, axis= 1)
+
+
+
+    # Perform 80-20 split
+    X_train, X_test = train_test_split(X, test_size=0.2, random_state=42)
+    Y_train, y_test = train_test_split(y, test_size= 0.2, random_state=42)
+
 
 
 
@@ -272,11 +303,13 @@ if __name__ == "__main__":
 
     
     # Initialize and train the MLP
+    loss_activation_function = ActivationFunction(func = softmax, derivative= softmax_derivative)
     activation_function_relu = ActivationFunction(func = ReLU, derivative= ReLU_derivative)
-    mlp = MLPSoftmax(initalizer= random_optimized_initalizer, activation_function= activation_function_relu, layer_sizes= [13, 256, 3])  # Input: 3, Hidden: 5, Output: 3 (softmax)
+    mlp = MLPSoftmax(initalizer= random_optimized_initalizer,loss_activation= loss_activation_function,  activation_function= activation_function_relu, layer_sizes= [13, 256, 3])  # Input: 3, Hidden: 5, Output: 3 (softmax)
     print(f"cross-entropy y_label againt y_label: {mlp.cross_entropy_loss(y, y)}")
-    print(f"Intialized weights loss: {mlp.predict(X, y)[0]:.4f}")
-    mlp.fit(X, y, learning_rate=1e-4, epochs=5, batch= 10, termination_condition= 1e-3, max_iters= 100)
-    predictions = mlp.predict(X, y)
-    print(f"Final Loss: {predictions[0]:.4f}")
-    print(f"The probabilites:{predictions[1]}")
+    print(f"Intialized weights loss: {mlp.predict(X)}")
+    mlp.fit(X_train=X, y_train= y,X_test=X_test, y_test=y_test, learning_rate=1e-4, epochs=50, batch= 10, termination_condition= 1e-3, max_iters= 1000, plot=True)
+    predictions = mlp.predict(X)
+    print(f"Final Loss: {predictions}")
+    print(f"True labels: {y_list}")
+    print(f"Final Accuracy:{mlp.evaluate_acc(y_true = y_list, y_pred= predictions)}")
