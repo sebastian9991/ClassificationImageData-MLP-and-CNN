@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import pyplot
 import matplotlib.image as mpimg
+import math
 
 import torch
 import torch.nn as nn
@@ -51,10 +52,39 @@ class CNN_basic(nn.Module): #I'm assuming greyscale images
         #Flattening
         self.model.append(nn.Flatten()) #What is the size of flatten?
 
-        self.model.append(nn.Linear(256, 256)) #Hidden Layer
+        input_size = self.calculate_output_size(input_height=128, input_width=128, num_filters=num_filters, filter_size=filter_size, strides=strides, padding=padding, pool_size=pool_size)
+
+        self.model.append(nn.Linear(input_size, 256)) #Hidden Layer
         self.model.append(nn.ReLU())
         self.model.append(nn.Linear(256, 11))
         ## Softmax
+        self.model.append(nn.LogSoftmax())
+    
+    def calculate_output_size(self, input_height, input_width, num_filters, filter_size, strides, padding, pool_size):
+        """
+        Calculate the outpute size for the input dimension for the first linear layer
+        """
+        #First conv
+        conv_height = math.floor((input_height + 2 * padding - filter_size) / strides) + 1
+        conv_width = math.floor((input_width + 2 * padding - filter_size) / strides) + 1
+
+        #First pool
+        pool_height = math.floor(conv_height / pool_size)
+        pool_width = math.floor(conv_width / pool_size)
+
+        #Second Conv
+        conv2_height = math.floor((pool_height + 2 * padding - filter_size) / strides) + 1
+        conv2_width = math.floor((pool_width + 2 * padding - filter_size) / strides) + 1
+
+        #Second Pool
+        pool2_height = math.floor(conv2_height / pool_size)
+        pool2_width = math.floor(conv2_width / pool_size)
+
+        #Flattened size
+        flattened_size = num_filters * pool2_height * pool2_width
+
+        return flattened_size
+
     
     def forward(self, x):
         return self.model(x)
